@@ -53,10 +53,9 @@ contract Manager {
     function supply(uint amount) external {
       usdc.safeTransferFrom(msg.sender, address(this), amount);
       uint lTokenAmount;
-      uint totalUsdc = usdc.balanceOf(address(this)) - amount;
       lToken.totalSupply() == 0 
         ? lTokenAmount = amount 
-        : lTokenAmount = amount * lToken.totalSupply() / totalUsdc;
+        : lTokenAmount = amount * lToken.totalSupply() / usdc.balanceOf(address(this));
       lToken.mint(msg.sender, lTokenAmount);
     }
 
@@ -69,8 +68,10 @@ contract Manager {
 
     function supplyCollateral(uint amount) external {
       weth.safeTransferFrom(msg.sender, address(this), amount);
-      positions[msg.sender].collateral += amount;
-      totalCollateral                  += amount;
+      Position storage position = positions[msg.sender];
+      if (position.lastInterestAccrual == 0) { position.lastInterestAccrual = block.timestamp; }
+      position.collateral += amount;
+      totalCollateral     += amount;
     }
 
     function withdrawCollateral(uint amount) external {
@@ -84,14 +85,8 @@ contract Manager {
     function borrow(uint amount) external {
       accrueInterest(msg.sender);
       Position storage position = positions[msg.sender];
-
-      uint interest = pendingInterest(position);
-      position.debt += interest;
-      position.lastInterestAccrual = block.timestamp;
-
       position.debt += amount;
       totalDebt     += amount;
-
       require(isPositionHealthy(msg.sender));
       usdc.safeTransfer(msg.sender, amount);
     }
@@ -99,15 +94,9 @@ contract Manager {
     function repay(uint amount) external {
       accrueInterest(msg.sender);
       Position storage position = positions[msg.sender];
-
-      uint interest = pendingInterest(position);
-      position.debt += interest;
-      position.lastInterestAccrual = block.timestamp;
-
       uint repayAmount = amount > position.debt ? position.debt : amount;
       position.debt -= repayAmount;
       totalDebt     -= repayAmount;
-
       usdc.safeTransferFrom(msg.sender, address(this), repayAmount);
     }
 
@@ -116,10 +105,6 @@ contract Manager {
       require(!isPositionHealthy(borrower));
 
       Position storage position = positions[borrower];
-
-      uint interest = pendingInterest(position);
-      position.debt += interest;
-      position.lastInterestAccrual = block.timestamp;
 
       uint debt      = position.debt;
       uint seizedETH = debt * 1e18 / (oracle.latestAnswer() * 1e10);
