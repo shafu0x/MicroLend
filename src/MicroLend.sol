@@ -10,6 +10,7 @@ contract MicroLend {
     using SafeTransferLib for ERC20;
 
     ERC20  public usdcToken;
+    ERC20  public wethToken
     Oracle public oracle;
 
     uint public constant LTV = 75;              // Loan-to-Value ratio in percentage
@@ -32,17 +33,18 @@ contract MicroLend {
       oracle    = Oracle(_oracle);
     }
 
-    function supplyCollateral() external payable {
-      positions[msg.sender].collateralETH += msg.value;
-      totalCollateralETH += msg.value;
+    function supplyCollateral(uint amount) external {
+      wethToken.safeTransferFrom(msg.sender, address(this), amountWETH);
+      positions[msg.sender].collateralETH += amount;
+      totalCollateralETH += amount;
     }
 
-    function withdrawCollateral(uint amountETH) external {
-      positions[msg.sender].collateralETH -= amountETH;
-      totalCollateralETH -= amountETH;
+    function withdrawCollateral(uint amount) external {
+      positions[msg.sender].collateralETH -= amount;
+      totalCollateralETH -= amount;
 
       require(isPositionHealthy(msg.sender));
-      payable(msg.sender).transfer(amountETH);
+      wethToken.safeTransfer(msg.sender, amount);
     }
 
     function borrow(uint amountUSDC) external {
@@ -84,13 +86,12 @@ contract MicroLend {
       position.lastInterestAccrual = block.timestamp;
 
       uint debtUSDC = position.debtUSDC;
-
       uint collateralValueUSDC  = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint totalSeizedValueUSDC = debtUSDC * (100 + LIQUIDATION_BONUS) / 100;
+      uint totalSeizedValueUSDC = debtUSDC;
 
       if (totalSeizedValueUSDC > collateralValueUSDC) {
           totalSeizedValueUSDC = collateralValueUSDC;
-          debtUSDC = totalSeizedValueUSDC * 100 / (100 + LIQUIDATION_BONUS);
+          debtUSDC = totalSeizedValueUSDC;
       }
 
       uint seizedETH = totalSeizedValueUSDC * 1e18 / (oracle.latestAnswer() * 1e10);
@@ -100,8 +101,7 @@ contract MicroLend {
       totalCollateralETH     -= seizedETH;
       totalDebtUSDC          -= debtUSDC;
 
-      payable(msg.sender).transfer(seizedETH);
-
+      wethToken.safeTransfer(msg.sender, seizedWETH);
       usdcToken.safeTransferFrom(msg.sender, address(this), debtUSDC);
     }
 
@@ -118,7 +118,4 @@ contract MicroLend {
       uint interest    = position.debtUSDC * INTEREST_RATE * timeElapsed / 365 days / 100;
       return interest;
     }
-
-    /// @notice Fallback function to accept ETH.
-    receive() external payable {}
 }
