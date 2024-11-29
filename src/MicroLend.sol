@@ -6,12 +6,27 @@ import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
 
 interface Oracle { function latestAnswer() external view returns (uint); }
 
-contract MicroLend {
+contract LToken is ERC20("Liquidity Token", "LToken", 18) {
+  address public manager;
+
+  constructor(address _manager) { manager = _manager; }
+
+  modifier onlyManager() {
+    require(manager == msg.sender);
+    _;
+  }
+
+  function mint(address to,   uint amount) public onlyManager { _mint(to,   amount); }
+  function burn(address from, uint amount) public onlyManager { _burn(from, amount); }
+}
+
+contract Manager {
     using SafeTransferLib for ERC20;
 
     ERC20  public usdc;
     ERC20  public weth;
     Oracle public oracle;
+    LToken public lToken;
 
     uint public constant LTV = 75;
     uint public constant INTEREST_RATE = 5;
@@ -32,16 +47,24 @@ contract MicroLend {
       usdc   = ERC20(_usdc);
       weth   = ERC20(_weth);
       oracle = Oracle(_oracle);
+      lToken = new LToken(address(this));
     }
 
     function supply(uint amount) external {
       usdc.safeTransferFrom(msg.sender, address(this), amount);
-      positions[msg.sender].liquidity += amount;
+      uint lTokenAmount;
+      uint totalUsdc = usdc.balanceOf(address(this)) - amount;
+      lToken.totalSupply() == 0 
+        ? lTokenAmount = amount 
+        : lTokenAmount = amount * lToken.totalSupply() / totalUsdc;
+      lToken.mint(msg.sender, lTokenAmount);
     }
 
     function withdraw(uint amount) external {
-      positions[msg.sender].liquidity -= amount;
-      usdc.safeTransfer(msg.sender, amount);
+      uint totalUsdc = usdc.balanceOf(address(this));
+      uint usdcAmount = amount * totalUsdc / lToken.totalSupply();
+      lToken.burn(msg.sender, amount);
+      usdc.safeTransfer(msg.sender, usdcAmount);
     }
 
     function supplyCollateral(uint amount) external {
@@ -51,6 +74,7 @@ contract MicroLend {
     }
 
     function withdrawCollateral(uint amount) external {
+      accrueInterest(msg.sender);
       positions[msg.sender].collateral -= amount;
       totalCollateral                  -= amount;
       require(isPositionHealthy(msg.sender));
@@ -58,6 +82,7 @@ contract MicroLend {
     }
 
     function borrow(uint amount) external {
+      accrueInterest(msg.sender);
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
@@ -72,6 +97,7 @@ contract MicroLend {
     }
 
     function repay(uint amount) external {
+      accrueInterest(msg.sender);
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
@@ -86,6 +112,7 @@ contract MicroLend {
     }
 
     function liquidate(address borrower) external {
+      accrueInterest(borrower);
       require(!isPositionHealthy(borrower));
 
       Position storage position = positions[borrower];
@@ -118,5 +145,13 @@ contract MicroLend {
       uint timeElapsed = block.timestamp - position.lastInterestAccrual;
       uint interest    = position.debt * INTEREST_RATE * timeElapsed / 365 days / 100;
       return interest;
+    }
+
+    function accrueInterest(address user) internal {
+      Position storage position = positions[user];
+      uint interest = pendingInterest(position);
+      position.debt += interest;
+      totalDebt     += interest;
+      position.lastInterestAccrual = block.timestamp;
     }
 }
