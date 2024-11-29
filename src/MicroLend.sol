@@ -18,9 +18,9 @@ contract MicroLend {
     uint public constant LIQUIDATION_BONUS = 5; // Liquidation bonus in percentage
 
     struct Position {
-      uint collateralETH; 
-      uint debtUSDC;     
-      uint lastInterestAccrual; // Timestamp of last interest accrual
+      uint collateral; 
+      uint debt;     
+      uint lastInterestAccrual;
     }
 
     mapping(address => Position) public positions;
@@ -33,14 +33,14 @@ contract MicroLend {
       oracle    = Oracle(_oracle);
     }
 
-    function supplyCollateral(uint amount) external {
+    function supply(uint amount) external {
       wethToken.safeTransferFrom(msg.sender, address(this), amount);
-      positions[msg.sender].collateralETH += amount;
+      positions[msg.sender].collateral += amount;
       totalCollateralETH += amount;
     }
 
-    function withdrawCollateral(uint amount) external {
-      positions[msg.sender].collateralETH -= amount;
+    function withdraw(uint amount) external {
+      positions[msg.sender].collateral -= amount;
       totalCollateralETH -= amount;
 
       require(isPositionHealthy(msg.sender));
@@ -51,10 +51,10 @@ contract MicroLend {
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
-      position.debtUSDC += interest;
+      position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      position.debtUSDC += amountUSDC;
+      position.debt += amountUSDC;
       totalDebtUSDC += amountUSDC;
 
       require(isPositionHealthy(msg.sender));
@@ -66,11 +66,11 @@ contract MicroLend {
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
-      position.debtUSDC += interest;
+      position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      uint repayAmount = amountUSDC > position.debtUSDC ? position.debtUSDC : amountUSDC;
-      position.debtUSDC -= repayAmount;
+      uint repayAmount = amountUSDC > position.debt ? position.debt : amountUSDC;
+      position.debt -= repayAmount;
       totalDebtUSDC -= repayAmount;
 
       usdcToken.safeTransferFrom(msg.sender, address(this), repayAmount);
@@ -82,40 +82,40 @@ contract MicroLend {
       Position storage position = positions[borrower];
 
       uint interest = pendingInterest(position);
-      position.debtUSDC += interest;
+      position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      uint debtUSDC = position.debtUSDC;
-      uint collateralValueUSDC  = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint totalSeizedValueUSDC = debtUSDC;
+      uint debt = position.debt;
+      uint collateralValueUSDC  = position.collateral * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint totalSeizedValueUSDC = debt;
 
       if (totalSeizedValueUSDC > collateralValueUSDC) {
           totalSeizedValueUSDC = collateralValueUSDC;
-          debtUSDC = totalSeizedValueUSDC;
+          debt = totalSeizedValueUSDC;
       }
 
       uint seizedETH = totalSeizedValueUSDC * 1e18 / (oracle.latestAnswer() * 1e10);
 
-      position.collateralETH -= seizedETH;
-      position.debtUSDC      -= debtUSDC;
-      totalCollateralETH     -= seizedETH;
-      totalDebtUSDC          -= debtUSDC;
+      position.collateral -= seizedETH;
+      position.debt       -= debt;
+      totalCollateralETH  -= seizedETH;
+      totalDebtUSDC       -= debt;
 
       wethToken.safeTransfer(msg.sender, seizedETH);
-      usdcToken.safeTransferFrom(msg.sender, address(this), debtUSDC);
+      usdcToken.safeTransferFrom(msg.sender, address(this), debt);
     }
 
     function isPositionHealthy(address user) public view returns (bool) {
       Position storage position = positions[user];
-      uint collateralValueUSDC  = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint collateralValueUSDC  = position.collateral * (oracle.latestAnswer() * 1e10) / 1e18;
       uint maxBorrowUSDC        = collateralValueUSDC * LTV / 100;
-      uint debtUSDCWithInterest = position.debtUSDC + pendingInterest(position);
+      uint debtUSDCWithInterest = position.debt + pendingInterest(position);
       return debtUSDCWithInterest <= maxBorrowUSDC;
     }
 
     function pendingInterest(Position storage position) internal view returns (uint) {
       uint timeElapsed = block.timestamp - position.lastInterestAccrual;
-      uint interest    = position.debtUSDC * INTEREST_RATE * timeElapsed / 365 days / 100;
+      uint interest    = position.debt * INTEREST_RATE * timeElapsed / 365 days / 100;
       return interest;
     }
 }
