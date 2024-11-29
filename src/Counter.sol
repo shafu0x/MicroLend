@@ -1,186 +1,127 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
+import {ERC20}           from "lib/solmate/src/tokens/ERC20.sol";
 import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
+
+interface Oracle { function latestAnswer() external view returns (uint); }
 
 contract MicroLend {
     using SafeTransferLib for ERC20;
 
-    ERC20 public usdcToken;
+    ERC20  public usdcToken;
+    Oracle public oracle;
 
-    // Assuming a fixed price: 1 ETH = 3000 USDC (USDC has 6 decimals)
-    uint256 public constant ETH_USDC_PRICE = 3000 * 1e6;
-    uint256 public constant LTV = 75; // Loan-to-Value ratio in percentage
-    uint256 public constant INTEREST_RATE = 5; // Annual interest rate in percentage
-    uint256 public constant LIQUIDATION_BONUS = 5; // Liquidation bonus in percentage
+    uint public constant LTV = 75;              // Loan-to-Value ratio in percentage
+    uint public constant INTEREST_RATE = 5;     // Annual interest rate in percentage
+    uint public constant LIQUIDATION_BONUS = 5; // Liquidation bonus in percentage
 
     struct Position {
-        uint256 collateralETH; // Collateral amount in ETH
-        uint256 debtUSDC;      // Debt amount in USDC
-        uint256 lastInterestAccrual; // Timestamp of last interest accrual
+      uint collateralETH; 
+      uint debtUSDC;     
+      uint lastInterestAccrual; // Timestamp of last interest accrual
     }
 
     mapping(address => Position) public positions;
 
-    uint256 public totalCollateralETH;
-    uint256 public totalDebtUSDC;
+    uint public totalCollateralETH;
+    uint public totalDebtUSDC;
 
-    event SupplyCollateral(address indexed user, uint256 amountETH);
-    event WithdrawCollateral(address indexed user, uint256 amountETH);
-    event Borrow(address indexed user, uint256 amountUSDC);
-    event Repay(address indexed user, uint256 amountUSDC);
-    event Liquidate(
-        address indexed liquidator,
-        address indexed borrower,
-        uint256 repaidAmountUSDC,
-        uint256 seizedAmountETH
-    );
-
-    constructor(address _usdcToken) {
-        usdcToken = ERC20(_usdcToken);
+    constructor(address _usdcToken, address _oracle) { 
+      usdcToken = ERC20(_usdcToken);
+      oracle    = Oracle(_oracle);
     }
 
-    /// @notice Supply ETH as collateral.
     function supplyCollateral() external payable {
-        require(msg.value > 0, "Must send ETH");
-
-        positions[msg.sender].collateralETH += msg.value;
-        totalCollateralETH += msg.value;
-
-        emit SupplyCollateral(msg.sender, msg.value);
+      positions[msg.sender].collateralETH += msg.value;
+      totalCollateralETH += msg.value;
     }
 
-    /// @notice Withdraw ETH collateral if position remains healthy.
-    function withdrawCollateral(uint256 amountETH) external {
-        require(amountETH > 0, "Amount must be > 0");
-        require(positions[msg.sender].collateralETH >= amountETH, "Not enough collateral");
+    function withdrawCollateral(uint amountETH) external {
+      positions[msg.sender].collateralETH -= amountETH;
+      totalCollateralETH -= amountETH;
 
-        // Update collateral
-        positions[msg.sender].collateralETH -= amountETH;
-        totalCollateralETH -= amountETH;
-
-        // Ensure position remains healthy
-        require(isPositionHealthy(msg.sender), "Position would become unhealthy");
-
-        // Transfer ETH back to user
-        payable(msg.sender).transfer(amountETH);
-
-        emit WithdrawCollateral(msg.sender, amountETH);
+      require(isPositionHealthy(msg.sender), "Position would become unhealthy");
+      payable(msg.sender).transfer(amountETH);
     }
 
-    /// @notice Borrow USDC against your ETH collateral.
-    function borrow(uint256 amountUSDC) external {
-        require(amountUSDC > 0, "Amount must be > 0");
+    function borrow(uint amountUSDC) external {
+      Position storage position = positions[msg.sender];
 
-        Position storage position = positions[msg.sender];
+      uint interest = pendingInterest(position);
+      position.debtUSDC += interest;
+      position.lastInterestAccrual = block.timestamp;
 
-        // Accrue interest
-        uint256 interest = calculateInterest(position);
-        position.debtUSDC += interest;
-        position.lastInterestAccrual = block.timestamp;
+      position.debtUSDC += amountUSDC;
+      totalDebtUSDC += amountUSDC;
 
-        // Update debt
-        position.debtUSDC += amountUSDC;
-        totalDebtUSDC += amountUSDC;
+      require(isPositionHealthy(msg.sender), "Borrowing exceeds collateral value");
 
-        // Ensure position is healthy after borrowing
-        require(isPositionHealthy(msg.sender), "Borrowing exceeds collateral value");
-
-        // Transfer USDC to user
-        usdcToken.safeTransfer(msg.sender, amountUSDC);
-
-        emit Borrow(msg.sender, amountUSDC);
+      usdcToken.safeTransfer(msg.sender, amountUSDC);
     }
 
-    /// @notice Repay your USDC debt.
-    function repay(uint256 amountUSDC) external {
-        require(amountUSDC > 0, "Amount must be > 0");
+    function repay(uint amountUSDC) external {
+      Position storage position = positions[msg.sender];
 
-        Position storage position = positions[msg.sender];
+      uint interest = pendingInterest(position);
+      position.debtUSDC += interest;
+      position.lastInterestAccrual = block.timestamp;
 
-        // Accrue interest
-        uint256 interest = calculateInterest(position);
-        position.debtUSDC += interest;
-        position.lastInterestAccrual = block.timestamp;
+      uint repayAmount = amountUSDC > position.debtUSDC ? position.debtUSDC : amountUSDC;
+      position.debtUSDC -= repayAmount;
+      totalDebtUSDC -= repayAmount;
 
-        // Update debt
-        uint256 repayAmount = amountUSDC > position.debtUSDC ? position.debtUSDC : amountUSDC;
-        position.debtUSDC -= repayAmount;
-        totalDebtUSDC -= repayAmount;
-
-        // Transfer USDC from user
-        usdcToken.safeTransferFrom(msg.sender, address(this), repayAmount);
-
-        emit Repay(msg.sender, repayAmount);
+      usdcToken.safeTransferFrom(msg.sender, address(this), repayAmount);
     }
 
-    /// @notice Liquidate an undercollateralized position.
     function liquidate(address borrower) external {
-        require(!isPositionHealthy(borrower), "Position is healthy");
+      require(!isPositionHealthy(borrower), "Position is healthy");
 
-        Position storage position = positions[borrower];
+      Position storage position = positions[borrower];
 
-        // Accrue interest
-        uint256 interest = calculateInterest(position);
-        position.debtUSDC += interest;
-        position.lastInterestAccrual = block.timestamp;
+      uint interest = pendingInterest(position);
+      position.debtUSDC += interest;
+      position.lastInterestAccrual = block.timestamp;
 
-        // Calculate max repayable debt (50% of total debt for this example)
-        uint256 maxRepayAmount = position.debtUSDC * 50 / 100;
+      uint maxRepayAmount = position.debtUSDC * 50 / 100;
 
-        // Calculate collateral to seize with liquidation bonus
-        uint256 collateralValueUSDC = position.collateralETH * ETH_USDC_PRICE / 1e18;
-        uint256 liquidationBonusValue = maxRepayAmount * LIQUIDATION_BONUS / 100;
-        uint256 totalSeizedValueUSDC = maxRepayAmount + liquidationBonusValue;
+      uint collateralValueUSDC = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint liquidationBonusValue = maxRepayAmount * LIQUIDATION_BONUS / 100;
+      uint totalSeizedValueUSDC = maxRepayAmount + liquidationBonusValue;
 
-        // Adjust if collateral is insufficient
-        if (totalSeizedValueUSDC > collateralValueUSDC) {
-            totalSeizedValueUSDC = collateralValueUSDC;
-            maxRepayAmount = totalSeizedValueUSDC * 100 / (100 + LIQUIDATION_BONUS);
-            liquidationBonusValue = totalSeizedValueUSDC - maxRepayAmount;
-        }
+      if (totalSeizedValueUSDC > collateralValueUSDC) {
+          totalSeizedValueUSDC = collateralValueUSDC;
+          maxRepayAmount = totalSeizedValueUSDC * 100 / (100 + LIQUIDATION_BONUS);
+          liquidationBonusValue = totalSeizedValueUSDC - maxRepayAmount;
+      }
 
-        // Convert seized collateral value to ETH amount
-        uint256 seizedETH = totalSeizedValueUSDC * 1e18 / ETH_USDC_PRICE;
+      uint seizedETH = totalSeizedValueUSDC * 1e18 / (oracle.latestAnswer() * 1e10);
 
-        // Update positions
-        position.collateralETH -= seizedETH;
-        position.debtUSDC -= maxRepayAmount;
-        totalCollateralETH -= seizedETH;
-        totalDebtUSDC -= maxRepayAmount;
+      position.collateralETH -= seizedETH;
+      position.debtUSDC      -= maxRepayAmount;
+      totalCollateralETH     -= seizedETH;
+      totalDebtUSDC          -= maxRepayAmount;
 
-        // Transfer seized collateral to liquidator
-        payable(msg.sender).transfer(seizedETH);
+      payable(msg.sender).transfer(seizedETH);
 
-        // Transfer USDC from liquidator
-        usdcToken.safeTransferFrom(msg.sender, address(this), maxRepayAmount);
-
-        emit Liquidate(msg.sender, borrower, maxRepayAmount, seizedETH);
+      usdcToken.safeTransferFrom(msg.sender, address(this), maxRepayAmount);
     }
 
-    /// @notice Check if a user's position is healthy.
     function isPositionHealthy(address user) public view returns (bool) {
-        Position storage position = positions[user];
+      Position storage position = positions[user];
 
-        uint256 collateralValueUSDC = position.collateralETH * ETH_USDC_PRICE / 1e18;
-        uint256 maxBorrowUSDC = collateralValueUSDC * LTV / 100;
+      uint collateralValueUSDC = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint maxBorrowUSDC = collateralValueUSDC * LTV / 100;
 
-        uint256 debtUSDCWithInterest = position.debtUSDC + pendingInterest(position);
+      uint debtUSDCWithInterest = position.debtUSDC + pendingInterest(position);
 
-        return debtUSDCWithInterest <= maxBorrowUSDC;
+      return debtUSDCWithInterest <= maxBorrowUSDC;
     }
 
-    /// @notice Calculate pending interest for a position.
-    function pendingInterest(Position storage position) internal view returns (uint256) {
-        uint256 timeElapsed = block.timestamp - position.lastInterestAccrual;
-        uint256 interest = position.debtUSDC * INTEREST_RATE * timeElapsed / 365 days / 100;
-        return interest;
-    }
-
-    /// @notice Calculate accrued interest for a position.
-    function calculateInterest(Position storage position) internal view returns (uint256) {
-        return pendingInterest(position);
+    function pendingInterest(Position storage position) internal view returns (uint) {
+      uint timeElapsed = block.timestamp - position.lastInterestAccrual;
+      uint interest    = position.debtUSDC * INTEREST_RATE * timeElapsed / 365 days / 100;
+      return interest;
     }
 
     /// @notice Fallback function to accept ETH.
