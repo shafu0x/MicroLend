@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import { IERC20 } from "./interfaces/IERC20.sol";
-import { SafeERC20 } from "./libraries/SafeERC20.sol";
+import {ERC20} from "lib/solmate/src/tokens/ERC20.sol";
+import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
 
 contract MicroLend {
-    using SafeERC20 for IERC20;
+    using SafeTransferLib for ERC20;
 
-    IERC20 public usdcToken;
+    ERC20 public usdcToken;
 
     // Assuming a fixed price: 1 ETH = 3000 USDC (USDC has 6 decimals)
     uint256 public constant ETH_USDC_PRICE = 3000 * 1e6;
@@ -38,7 +38,7 @@ contract MicroLend {
     );
 
     constructor(address _usdcToken) {
-        usdcToken = IERC20(_usdcToken);
+        usdcToken = ERC20(_usdcToken);
     }
 
     /// @notice Supply ETH as collateral.
