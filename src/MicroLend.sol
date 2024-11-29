@@ -109,12 +109,9 @@ contract MicroLend {
 
     function isPositionHealthy(address user) public view returns (bool) {
       Position storage position = positions[user];
-
-      uint collateralValueUSDC = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint maxBorrowUSDC = collateralValueUSDC * LTV / 100;
-
+      uint collateralValueUSDC  = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint maxBorrowUSDC        = collateralValueUSDC * LTV / 100;
       uint debtUSDCWithInterest = position.debtUSDC + pendingInterest(position);
-
       return debtUSDCWithInterest <= maxBorrowUSDC;
     }
 
