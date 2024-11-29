@@ -9,13 +9,13 @@ interface Oracle { function latestAnswer() external view returns (uint); }
 contract MicroLend {
     using SafeTransferLib for ERC20;
 
-    ERC20  public usdcToken;
-    ERC20  public wethToken;
+    ERC20  public usdc;
+    ERC20  public weth;
     Oracle public oracle;
 
-    uint public constant LTV = 75;              // Loan-to-Value ratio in percentage
-    uint public constant INTEREST_RATE = 5;     // Annual interest rate in percentage
-    uint public constant LIQUIDATION_BONUS = 5; // Liquidation bonus in percentage
+    uint public constant LTV = 75;
+    uint public constant INTEREST_RATE = 5;
+    uint public constant LIQUIDATION_BONUS = 5;
 
     struct Position {
       uint collateral; 
@@ -25,55 +25,53 @@ contract MicroLend {
 
     mapping(address => Position) public positions;
 
-    uint public totalCollateralETH;
-    uint public totalDebtUSDC;
+    uint public totalCollateral;
+    uint public totalDebt;
 
-    constructor(address _usdcToken, address _oracle) { 
-      usdcToken = ERC20(_usdcToken);
-      oracle    = Oracle(_oracle);
+    constructor(address _usdc, address _oracle) { 
+      usdc   = ERC20(_usdc);
+      oracle = Oracle(_oracle);
     }
 
     function supply(uint amount) external {
-      wethToken.safeTransferFrom(msg.sender, address(this), amount);
+      weth.safeTransferFrom(msg.sender, address(this), amount);
       positions[msg.sender].collateral += amount;
-      totalCollateralETH += amount;
+      totalCollateral += amount;
     }
 
     function withdraw(uint amount) external {
       positions[msg.sender].collateral -= amount;
-      totalCollateralETH -= amount;
-
+      totalCollateral -= amount;
       require(isPositionHealthy(msg.sender));
-      wethToken.safeTransfer(msg.sender, amount);
+      weth.safeTransfer(msg.sender, amount);
     }
 
-    function borrow(uint amountUSDC) external {
+    function borrow(uint amount) external {
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
       position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      position.debt += amountUSDC;
-      totalDebtUSDC += amountUSDC;
+      position.debt += amount;
+      totalDebt     += amount;
 
       require(isPositionHealthy(msg.sender));
-
-      usdcToken.safeTransfer(msg.sender, amountUSDC);
+      usdc.safeTransfer(msg.sender, amount);
     }
 
-    function repay(uint amountUSDC) external {
+    function repay(uint amount) external {
       Position storage position = positions[msg.sender];
 
       uint interest = pendingInterest(position);
       position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      uint repayAmount = amountUSDC > position.debt ? position.debt : amountUSDC;
+      uint repayAmount = amount > position.debt ? position.debt : amount;
       position.debt -= repayAmount;
-      totalDebtUSDC -= repayAmount;
+      totalDebt     -= repayAmount;
 
-      usdcToken.safeTransferFrom(msg.sender, address(this), repayAmount);
+      usdc.safeTransferFrom(msg.sender, address(this), repayAmount);
     }
 
     function liquidate(address borrower) external {
@@ -98,19 +96,19 @@ contract MicroLend {
 
       position.collateral -= seizedETH;
       position.debt       -= debt;
-      totalCollateralETH  -= seizedETH;
-      totalDebtUSDC       -= debt;
+      totalCollateral     -= seizedETH;
+      totalDebt           -= debt;
 
-      wethToken.safeTransfer(msg.sender, seizedETH);
-      usdcToken.safeTransferFrom(msg.sender, address(this), debt);
+      weth.safeTransfer(msg.sender, seizedETH);
+      usdc.safeTransferFrom(msg.sender, address(this), debt);
     }
 
     function isPositionHealthy(address user) public view returns (bool) {
       Position storage position = positions[user];
-      uint collateralValueUSDC  = position.collateral * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint maxBorrowUSDC        = collateralValueUSDC * LTV / 100;
-      uint debtUSDCWithInterest = position.debt + pendingInterest(position);
-      return debtUSDCWithInterest <= maxBorrowUSDC;
+      uint collateralValue      = position.collateral * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint maxBorrow            = collateralValue * LTV / 100;
+      uint debtWithInterest     = position.debt + pendingInterest(position);
+      return debtWithInterest <= maxBorrow;
     }
 
     function pendingInterest(Position storage position) internal view returns (uint) {
