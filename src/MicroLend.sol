@@ -41,7 +41,7 @@ contract MicroLend {
       positions[msg.sender].collateralETH -= amountETH;
       totalCollateralETH -= amountETH;
 
-      require(isPositionHealthy(msg.sender), "Position would become unhealthy");
+      require(isPositionHealthy(msg.sender));
       payable(msg.sender).transfer(amountETH);
     }
 
@@ -55,7 +55,7 @@ contract MicroLend {
       position.debtUSDC += amountUSDC;
       totalDebtUSDC += amountUSDC;
 
-      require(isPositionHealthy(msg.sender), "Borrowing exceeds collateral value");
+      require(isPositionHealthy(msg.sender));
 
       usdcToken.safeTransfer(msg.sender, amountUSDC);
     }
@@ -75,7 +75,7 @@ contract MicroLend {
     }
 
     function liquidate(address borrower) external {
-      require(!isPositionHealthy(borrower), "Position is healthy");
+      require(!isPositionHealthy(borrower));
 
       Position storage position = positions[borrower];
 
@@ -83,28 +83,26 @@ contract MicroLend {
       position.debtUSDC += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      uint maxRepayAmount = position.debtUSDC * 50 / 100;
+      uint debtUSDC = position.debtUSDC;
 
-      uint collateralValueUSDC = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint liquidationBonusValue = maxRepayAmount * LIQUIDATION_BONUS / 100;
-      uint totalSeizedValueUSDC = maxRepayAmount + liquidationBonusValue;
+      uint collateralValueUSDC  = position.collateralETH * (oracle.latestAnswer() * 1e10) / 1e18;
+      uint totalSeizedValueUSDC = debtUSDC * (100 + LIQUIDATION_BONUS) / 100;
 
       if (totalSeizedValueUSDC > collateralValueUSDC) {
           totalSeizedValueUSDC = collateralValueUSDC;
-          maxRepayAmount = totalSeizedValueUSDC * 100 / (100 + LIQUIDATION_BONUS);
-          liquidationBonusValue = totalSeizedValueUSDC - maxRepayAmount;
+          debtUSDC = totalSeizedValueUSDC * 100 / (100 + LIQUIDATION_BONUS);
       }
 
       uint seizedETH = totalSeizedValueUSDC * 1e18 / (oracle.latestAnswer() * 1e10);
 
       position.collateralETH -= seizedETH;
-      position.debtUSDC      -= maxRepayAmount;
+      position.debtUSDC      -= debtUSDC;
       totalCollateralETH     -= seizedETH;
-      totalDebtUSDC          -= maxRepayAmount;
+      totalDebtUSDC          -= debtUSDC;
 
       payable(msg.sender).transfer(seizedETH);
 
-      usdcToken.safeTransferFrom(msg.sender, address(this), maxRepayAmount);
+      usdcToken.safeTransferFrom(msg.sender, address(this), debtUSDC);
     }
 
     function isPositionHealthy(address user) public view returns (bool) {
