@@ -19,6 +19,7 @@ contract MicroLend {
     struct Position {
       uint collateral; 
       uint debt;     
+      uint liquidity;
       uint lastInterestAccrual;
     }
 
@@ -34,12 +35,22 @@ contract MicroLend {
     }
 
     function supply(uint amount) external {
+      usdc.safeTransferFrom(msg.sender, address(this), amount);
+      positions[msg.sender].liquidity += amount;
+    }
+
+    function withdraw(uint amount) external {
+      positions[msg.sender].liquidity -= amount;
+      usdc.safeTransfer(msg.sender, amount);
+    }
+
+    function supplyCollateral(uint amount) external {
       weth.safeTransferFrom(msg.sender, address(this), amount);
       positions[msg.sender].collateral += amount;
       totalCollateral                  += amount;
     }
 
-    function withdraw(uint amount) external {
+    function withdrawCollateral(uint amount) external {
       positions[msg.sender].collateral -= amount;
       totalCollateral                  -= amount;
       require(isPositionHealthy(msg.sender));
