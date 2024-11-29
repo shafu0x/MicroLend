@@ -28,7 +28,7 @@ contract Manager {
     Oracle public oracle;
     LToken public lToken;
 
-    uint public constant LTV = 75;
+    uint public constant LTV           = 75;
     uint public constant INTEREST_RATE = 5;
 
     struct Position {
