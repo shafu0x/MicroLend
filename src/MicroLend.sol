@@ -15,7 +15,6 @@ contract MicroLend {
 
     uint public constant LTV = 75;
     uint public constant INTEREST_RATE = 5;
-    uint public constant LIQUIDATION_BONUS = 5;
 
     struct Position {
       uint collateral; 
@@ -28,20 +27,21 @@ contract MicroLend {
     uint public totalCollateral;
     uint public totalDebt;
 
-    constructor(address _usdc, address _oracle) { 
+    constructor(address _usdc, address _weth, address _oracle) { 
       usdc   = ERC20(_usdc);
+      weth   = ERC20(_weth);
       oracle = Oracle(_oracle);
     }
 
     function supply(uint amount) external {
       weth.safeTransferFrom(msg.sender, address(this), amount);
       positions[msg.sender].collateral += amount;
-      totalCollateral += amount;
+      totalCollateral                  += amount;
     }
 
     function withdraw(uint amount) external {
       positions[msg.sender].collateral -= amount;
-      totalCollateral -= amount;
+      totalCollateral                  -= amount;
       require(isPositionHealthy(msg.sender));
       weth.safeTransfer(msg.sender, amount);
     }
@@ -83,19 +83,11 @@ contract MicroLend {
       position.debt += interest;
       position.lastInterestAccrual = block.timestamp;
 
-      uint debt = position.debt;
-      uint collateralValueUSDC  = position.collateral * (oracle.latestAnswer() * 1e10) / 1e18;
-      uint totalSeizedValueUSDC = debt;
+      uint debt      = position.debt;
+      uint seizedETH = debt * 1e18 / (oracle.latestAnswer() * 1e10);
 
-      if (totalSeizedValueUSDC > collateralValueUSDC) {
-          totalSeizedValueUSDC = collateralValueUSDC;
-          debt = totalSeizedValueUSDC;
-      }
-
-      uint seizedETH = totalSeizedValueUSDC * 1e18 / (oracle.latestAnswer() * 1e10);
-
-      position.collateral -= seizedETH;
-      position.debt       -= debt;
+      position.collateral  = 0;
+      position.debt        = 0;
       totalCollateral     -= seizedETH;
       totalDebt           -= debt;
 
