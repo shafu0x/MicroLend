@@ -10,7 +10,7 @@ contract MicroLend {
     using SafeTransferLib for ERC20;
 
     ERC20  public usdcToken;
-    ERC20  public wethToken
+    ERC20  public wethToken;
     Oracle public oracle;
 
     uint public constant LTV = 75;              // Loan-to-Value ratio in percentage
@@ -34,7 +34,7 @@ contract MicroLend {
     }
 
     function supplyCollateral(uint amount) external {
-      wethToken.safeTransferFrom(msg.sender, address(this), amountWETH);
+      wethToken.safeTransferFrom(msg.sender, address(this), amount);
       positions[msg.sender].collateralETH += amount;
       totalCollateralETH += amount;
     }
@@ -101,7 +101,7 @@ contract MicroLend {
       totalCollateralETH     -= seizedETH;
       totalDebtUSDC          -= debtUSDC;
 
-      wethToken.safeTransfer(msg.sender, seizedWETH);
+      wethToken.safeTransfer(msg.sender, seizedETH);
       usdcToken.safeTransferFrom(msg.sender, address(this), debtUSDC);
     }
 
