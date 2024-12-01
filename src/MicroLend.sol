@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ERC20}           from "lib/solmate/src/tokens/ERC20.sol";
-import {SafeTransferLib} from "lib/solmate/src/utils/SafeTransferLib.sol";
+import {ERC20}             from "lib/solmate/src/tokens/ERC20.sol";
+import {SafeTransferLib}   from "lib/solmate/src/utils/SafeTransferLib.sol";
+import {FixedPointMathLib} from "lib/solmate/src/utils/FixedPointMathLib.sol";
 
 interface Oracle { function latestAnswer() external view returns (uint); }
 
@@ -28,12 +29,13 @@ contract Manager {
     Oracle public oracle;
     LToken public lToken;
 
-    uint public constant LTV           = 75;
-    uint public constant INTEREST_RATE = 5;
+    uint public constant LTV              = 75;
+    uint public constant INTEREST_RATE    = 5;
+    uint public constant INTEREST_DIVISOR = 365 days * 100;
 
     struct Position {
-      uint collateral; 
-      uint debt;     
+      uint collateral;
+      uint debt;
       uint liquidity;
       uint lastInterestAccrual;
     }
@@ -42,8 +44,10 @@ contract Manager {
 
     uint public totalCollateral;
     uint public totalDebt;
+    uint public unrealizedInterestFractions;
+    uint public lastInterestAccrual;
 
-    constructor(address _usdc, address _weth, address _oracle) { 
+    constructor(address _usdc, address _weth, address _oracle) {
       usdc   = ERC20(_usdc);
       weth   = ERC20(_weth);
       oracle = Oracle(_oracle);
@@ -53,15 +57,23 @@ contract Manager {
     function supply(uint amount) external {
       usdc.safeTransferFrom(msg.sender, address(this), amount);
       uint lTokenAmount;
-      lToken.totalSupply() == 0 
-        ? lTokenAmount = amount 
-        : lTokenAmount = amount * lToken.totalSupply() / usdc.balanceOf(address(this));
+      uint totalUsdcFractions =
+        (usdc.balanceOf(address(this)) + totalDebt) * INTEREST_DIVISOR +
+          (unrealizedInterestFractions + pendingGlobalInterestFractions());
+      lToken.totalSupply() == 0
+        ? lTokenAmount = amount
+        : lTokenAmount = FixedPointMathLib.unsafeDivUp(
+            amount * lToken.totalSupply() * INTEREST_DIVISOR,
+            totalUsdcFractions
+          );
       lToken.mint(msg.sender, lTokenAmount);
     }
 
     function withdraw(uint amount) external {
-      uint totalUsdc = usdc.balanceOf(address(this));
-      uint usdcAmount = amount * totalUsdc / lToken.totalSupply();
+      uint totalUsdcFractions =
+        (usdc.balanceOf(address(this)) + totalDebt) * INTEREST_DIVISOR +
+          (unrealizedInterestFractions + pendingGlobalInterestFractions());
+      uint usdcAmount = amount * totalUsdcFractions / lToken.totalSupply() / INTEREST_DIVISOR;
       lToken.burn(msg.sender, amount);
       usdc.safeTransfer(msg.sender, usdcAmount);
     }
@@ -126,15 +138,33 @@ contract Manager {
       return debtWithInterest <= maxBorrow;
     }
 
-    function pendingInterest(Position storage position) internal view returns (uint) {
+    function pendingInterestFractions(Position storage position) internal view returns (uint) {
       uint timeElapsed = block.timestamp - position.lastInterestAccrual;
-      uint interest    = position.debt * INTEREST_RATE * timeElapsed / 365 days / 100;
-      return interest;
+      uint interestFractions = position.debt * INTEREST_RATE * timeElapsed;
+      return interestFractions;
+    }
+
+    function pendingInterest(Position storage position) internal view returns (uint) {
+      return FixedPointMathLib.unsafeDivUp(pendingInterestFractions(position), INTEREST_DIVISOR);
+    }
+
+    function pendingGlobalInterestFractions() internal view returns (uint interestFractions) {
+      uint globalTimeElapsed = block.timestamp - lastInterestAccrual;
+      interestFractions = totalDebt * INTEREST_RATE * globalTimeElapsed;
+    }
+
+    function accrueGlobalInterest() internal {
+      unrealizedInterestFractions += pendingGlobalInterestFractions();
+      lastInterestAccrual = block.timestamp;
     }
 
     function accrueInterest(address user) internal {
+      accrueGlobalInterest();
       Position storage position = positions[user];
-      uint interest = pendingInterest(position);
+      uint interestFractions = pendingInterestFractions(position);
+      unrealizedInterestFractions -= interestFractions;
+      uint interest = FixedPointMathLib.unsafeDivUp(interestFractions, INTEREST_DIVISOR);
+
       position.debt += interest;
       totalDebt     += interest;
       position.lastInterestAccrual = block.timestamp;
