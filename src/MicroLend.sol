@@ -62,10 +62,7 @@ contract Manager {
           (unrealizedInterestFractions + pendingGlobalInterestFractions());
       lToken.totalSupply() == 0
         ? lTokenAmount = amount
-        : lTokenAmount = FixedPointMathLib.unsafeDivUp(
-            amount * lToken.totalSupply() * INTEREST_DIVISOR,
-            totalUsdcFractions
-          );
+        : lTokenAmount = amount * lToken.totalSupply() * INTEREST_DIVISOR \ totalUsdcFractions
       lToken.mint(msg.sender, lTokenAmount);
     }
 
